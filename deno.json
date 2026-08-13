@@ -1,0 +1,11 @@
+{
+  "tasks": {
+    "build": "deno run --allow-read --allow-write --allow-run=git scripts/synthetic-velocity.ts build",
+    "serve": "deno run --allow-read --allow-write --allow-net --allow-run=git scripts/synthetic-velocity.ts serve",
+    "serve:no-fetch": "deno run --allow-read --allow-write --allow-net --allow-run=git scripts/synthetic-velocity.ts serve --no-fetch",
+    "export": "deno run --allow-read --allow-write --allow-net --allow-env --allow-run scripts/export.ts"
+  },
+  "fmt": {
+    "exclude": ["in"]
+  }
+}

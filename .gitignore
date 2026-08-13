@@ -1,0 +1,6 @@
+.claude/
+.mcp.json
+in/
+site/
+.DS_Store
+out/
