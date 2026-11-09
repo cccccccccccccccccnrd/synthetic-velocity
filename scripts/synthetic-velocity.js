@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-net --allow-run=git
+#!/usr/bin/env node
 
 /**
  * synthetic velocity pipeline.
@@ -7,23 +7,18 @@
  * source repo HTML/SVG → extracted 2D forms → hosted iframe → 3D pipes → shader.
  */
 
-import { serveDir } from "jsr:@std/http/file-server";
-import { dirname, fromFileUrl, join, resolve } from "jsr:@std/path";
+import { spawn } from "node:child_process";
+import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { serveDir } from "./serve.js";
 
-const ROOT = resolve(dirname(fromFileUrl(import.meta.url)), "..");
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const INPUT_DIR = join(ROOT, "in");
 const SITE_DIR = join(ROOT, "site");
 const CLIENT_DIR = join(ROOT, "src", "client");
 
-interface SourceSpec {
-  id: string;
-  repoUrl: string;
-  branch: string;
-  assetPath: string;
-  include: RegExp;
-}
-
-const SOURCES: SourceSpec[] = [
+const SOURCES = [
   {
     id: "diagram-design",
     repoUrl: "https://github.com/cathrynlavery/diagram-design.git",
@@ -33,38 +28,36 @@ const SOURCES: SourceSpec[] = [
   },
 ];
 
-async function exists(path: string): Promise<boolean> {
+async function exists(path) {
   try {
-    await Deno.stat(path);
+    await stat(path);
     return true;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if (error.code === "ENOENT") return false;
     throw error;
   }
 }
 
-async function run(command: string[], cwd = ROOT): Promise<void> {
+function run(command, cwd = ROOT) {
   console.log("$", command.join(" "));
-  const child = new Deno.Command(command[0], {
-    args: command.slice(1),
-    cwd,
-    stdout: "inherit",
-    stderr: "inherit",
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command[0], command.slice(1), { cwd, stdio: "inherit" });
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0
+        ? resolvePromise()
+        : reject(new Error(`command failed: ${command.join(" ")}`))
+    );
   });
-  const status = await child.output();
-  if (!status.success) throw new Error(`command failed: ${command.join(" ")}`);
 }
 
-async function ensureSource(
-  source: SourceSpec,
-  noFetch: boolean,
-): Promise<string> {
+async function ensureSource(source, noFetch) {
   const repoDir = join(INPUT_DIR, source.id, "repo");
   if (noFetch && await exists(join(repoDir, source.assetPath))) return repoDir;
 
-  await Deno.mkdir(dirname(repoDir), { recursive: true });
+  await mkdir(dirname(repoDir), { recursive: true });
   if (!await exists(join(repoDir, ".git"))) {
-    if (await exists(repoDir)) await Deno.remove(repoDir, { recursive: true });
+    if (await exists(repoDir)) await rm(repoDir, { recursive: true });
     await run([
       "git",
       "clone",
@@ -87,30 +80,26 @@ async function ensureSource(
   return repoDir;
 }
 
-async function copyDirFiltered(
-  sourceDir: string,
-  outDir: string,
-  include: RegExp,
-): Promise<string[]> {
-  await Deno.mkdir(outDir, { recursive: true });
-  const copied: string[] = [];
-  for await (const entry of Deno.readDir(sourceDir)) {
-    if (!entry.isFile || !include.test(entry.name)) continue;
-    await Deno.copyFile(join(sourceDir, entry.name), join(outDir, entry.name));
+async function copyDirFiltered(sourceDir, outDir, include) {
+  await mkdir(outDir, { recursive: true });
+  const copied = [];
+  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !include.test(entry.name)) continue;
+    await copyFile(join(sourceDir, entry.name), join(outDir, entry.name));
     copied.push(entry.name);
   }
   copied.sort();
   return copied;
 }
 
-function escapeHtml(value: string): string {
+function escapeHtml(value) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(
     ">",
     "&gt;",
   ).replaceAll('"', "&quot;");
 }
 
-async function writeHostIndex(documents: string[]): Promise<void> {
+async function writeHostIndex(documents) {
   const sourceDocuments = documents.filter((doc) => doc !== "index.html");
   const options = sourceDocuments
     .map((doc) =>
@@ -120,7 +109,7 @@ async function writeHostIndex(documents: string[]): Promise<void> {
     )
     .join("\n");
 
-  await Deno.writeTextFile(
+  await writeFile(
     join(SITE_DIR, "index.html"),
     `<!doctype html>
 <html lang="en">
@@ -260,12 +249,12 @@ async function writeHostIndex(documents: string[]): Promise<void> {
   );
 }
 
-async function build(noFetch: boolean): Promise<void> {
+async function build(noFetch) {
   const tmpDir = `${SITE_DIR}.tmp`;
-  if (await exists(tmpDir)) await Deno.remove(tmpDir, { recursive: true });
-  await Deno.mkdir(tmpDir, { recursive: true });
+  if (await exists(tmpDir)) await rm(tmpDir, { recursive: true });
+  await mkdir(tmpDir, { recursive: true });
 
-  let docs: string[] = [];
+  let docs = [];
   for (const source of SOURCES) {
     const repoDir = await ensureSource(source, noFetch);
     const sourceAssets = join(repoDir, source.assetPath);
@@ -273,39 +262,27 @@ async function build(noFetch: boolean): Promise<void> {
     docs = await copyDirFiltered(sourceAssets, out, source.include);
   }
 
-  await Deno.copyFile(join(CLIENT_DIR, "art.js"), join(tmpDir, "art.js"));
-  if (await exists(SITE_DIR)) await Deno.remove(SITE_DIR, { recursive: true });
-  await Deno.rename(tmpDir, SITE_DIR);
+  await copyFile(join(CLIENT_DIR, "art.js"), join(tmpDir, "art.js"));
+  if (await exists(SITE_DIR)) await rm(SITE_DIR, { recursive: true });
+  await rename(tmpDir, SITE_DIR);
   await writeHostIndex(docs);
   console.log(`generated synthetic velocity host: ${SITE_DIR}`);
   console.log(`source documents: ${docs.length}`);
 }
 
-async function serveSite(host: string, port: number): Promise<void> {
-  console.log(`serving synthetic velocity: http://${host}:${port}/index.html`);
-  Deno.serve({ hostname: host, port }, (request) =>
-    serveDir(request, {
-      fsRoot: SITE_DIR,
-      urlRoot: "",
-      showDirListing: false,
-    }));
-}
-
-function argValue(args: string[], name: string, fallback: string): string {
+function argValue(args, name, fallback) {
   const index = args.indexOf(name);
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 }
 
-if (import.meta.main) {
-  const [command = "serve", ...args] = Deno.args;
-  const noFetch = args.includes("--no-fetch");
-  await build(noFetch);
-  if (command === "serve") {
-    await serveSite(
-      argValue(args, "--host", "127.0.0.1"),
-      Number(argValue(args, "--port", "8899")),
-    );
-  } else if (command !== "build") {
-    throw new Error(`unknown command: ${command}`);
-  }
+const [command = "serve", ...args] = process.argv.slice(2);
+if (command !== "serve" && command !== "build") {
+  throw new Error(`unknown command: ${command}`);
+}
+await build(args.includes("--no-fetch"));
+if (command === "serve") {
+  const host = argValue(args, "--host", "127.0.0.1");
+  const port = Number(argValue(args, "--port", "8899"));
+  await serveDir(SITE_DIR, host, port);
+  console.log(`serving synthetic velocity: http://${host}:${port}/index.html`);
 }

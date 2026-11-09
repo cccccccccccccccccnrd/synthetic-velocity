@@ -1,0 +1,17 @@
+{
+  "name": "synthetic-velocity",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node scripts/synthetic-velocity.js build",
+    "serve": "node scripts/synthetic-velocity.js serve",
+    "serve:no-fetch": "node scripts/synthetic-velocity.js serve --no-fetch",
+    "export": "node scripts/export.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "24.16.2"
+  }
+}

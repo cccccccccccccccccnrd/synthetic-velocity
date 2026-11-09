@@ -1,41 +1,35 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-net --allow-run
-/// <reference lib="dom" />
+#!/usr/bin/env node
 
-import puppeteer from "npm:puppeteer-core@24.16.2";
-import { serveDir } from "jsr:@std/http/file-server";
-import { dirname, fromFileUrl, join, resolve } from "jsr:@std/path";
+import { mkdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import puppeteer from "puppeteer-core";
+import { serveDir } from "./serve.js";
 
-const ROOT = resolve(dirname(fromFileUrl(import.meta.url)), "..");
+const env = process.env;
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE_DIR = join(ROOT, "site");
 const OUT_DIR = join(ROOT, "out", "screenshots");
-const CHROME = Deno.env.get("CHROME") ??
+const CHROME = env.CHROME ??
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const PORT = Number(Deno.env.get("EXPORT_PORT") ?? "8897");
+const PORT = Number(env.EXPORT_PORT ?? "8897");
 const SIZE = 2000;
-const ONLY = Deno.env.get("EXPORT_ONLY") ?? "";
-const STILL = (Deno.env.get("EXPORT_STILL") ?? "1") !== "0";
-const FRAMES = Number(Deno.env.get("EXPORT_FRAMES") ?? "1");
-const FRAME_DELAY_MS = Number(Deno.env.get("EXPORT_FRAME_DELAY_MS") ?? "500");
-const WARMUP_MS = Number(Deno.env.get("EXPORT_WARMUP_MS") ?? "120");
-const EVOLVE_VELOCITY = (Deno.env.get("EXPORT_EVOLVE_VELOCITY") ?? "1") !== "0";
+const ONLY = env.EXPORT_ONLY ?? "";
+const STILL = (env.EXPORT_STILL ?? "1") !== "0";
+const FRAMES = Number(env.EXPORT_FRAMES ?? "1");
+const FRAME_DELAY_MS = Number(env.EXPORT_FRAME_DELAY_MS ?? "500");
+const WARMUP_MS = Number(env.EXPORT_WARMUP_MS ?? "120");
+const EVOLVE_VELOCITY = (env.EXPORT_EVOLVE_VELOCITY ?? "1") !== "0";
 
-function slugFromPath(value: string): string {
+function slugFromPath(value) {
   const file = value.split("/").pop() ?? "form";
   return file.replace(/\.html?$/i, "").replace(/[^a-z0-9_-]+/gi, "-");
 }
 
 async function main() {
-  await Deno.mkdir(OUT_DIR, { recursive: true });
+  await mkdir(OUT_DIR, { recursive: true });
 
-  const server = Deno.serve(
-    { hostname: "127.0.0.1", port: PORT },
-    (request) =>
-      serveDir(request, {
-        fsRoot: SITE_DIR,
-        urlRoot: "",
-        showDirListing: false,
-      }),
-  );
+  const server = await serveDir(SITE_DIR, "127.0.0.1", PORT);
 
   const browser = await puppeteer.launch({
     executablePath: CHROME,
@@ -64,7 +58,7 @@ async function main() {
       "#source-select option",
       (nodes) =>
         nodes.map((node) => ({
-          value: (node as HTMLOptionElement).value,
+          value: node.value,
           label: node.textContent ?? "",
         })),
     );
@@ -75,10 +69,7 @@ async function main() {
 
     if (STILL) {
       await page.evaluate(() => {
-        const anyWindow = window as typeof window & {
-          params?: Record<string, number>;
-          trails?: { reset?: () => void };
-        };
+        const anyWindow = window;
         if (!anyWindow.params) return;
         // Still export: disable real pipe/camera motion, keep synthetic trails on.
         anyWindow.params.trailMotion = 0;
@@ -103,12 +94,8 @@ async function main() {
         candidate.value === option.value
       );
       await page.evaluate((index) => {
-        const select = document.getElementById("source-select") as
-          | HTMLSelectElement
-          | null;
-        const iframe = document.getElementById("preview") as
-          | HTMLIFrameElement
-          | null;
+        const select = document.getElementById("source-select");
+        const iframe = document.getElementById("preview");
         if (!select || !iframe) throw new Error("missing source controls");
         select.selectedIndex = index;
         iframe.src = select.value;
@@ -116,12 +103,8 @@ async function main() {
 
       await page.waitForFunction(
         (index) => {
-          const select = document.getElementById("source-select") as
-            | HTMLSelectElement
-            | null;
-          const iframe = document.getElementById("preview") as
-            | HTMLIFrameElement
-            | null;
+          const select = document.getElementById("source-select");
+          const iframe = document.getElementById("preview");
           return Boolean(
             select && iframe && select.selectedIndex === index &&
               iframe.contentDocument?.querySelector("svg"),
@@ -137,10 +120,7 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, WARMUP_MS));
       if (STILL) {
         await page.evaluate(() => {
-          const anyWindow = window as typeof window & {
-            params?: Record<string, number>;
-            trails?: { reset?: () => void };
-          };
+          const anyWindow = window;
           if (!anyWindow.params) return;
           anyWindow.params.trailMotion = 0;
           anyWindow.params.syntheticTrail = 1;
@@ -155,9 +135,7 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       const baseVelocity = await page.evaluate(() => {
-        const anyWindow = window as typeof window & {
-          params?: Record<string, number>;
-        };
+        const anyWindow = window;
         return {
           x: anyWindow.params?.syntheticVelocityX ?? -0.064,
           y: anyWindow.params?.syntheticVelocityY ?? 0.024,
@@ -174,12 +152,7 @@ async function main() {
           const x = (baseVelocity.x * cos - baseVelocity.y * sin) * factor;
           const y = (baseVelocity.x * sin + baseVelocity.y * cos) * factor;
           await page.evaluate((velocity) => {
-            const anyWindow = window as typeof window & {
-              params?: Record<string, number>;
-              trails?: {
-                setOptions?: (options: Record<string, number>) => void;
-              };
-            };
+            const anyWindow = window;
             if (!anyWindow.params) return;
             anyWindow.params.syntheticVelocityX = velocity.x;
             anyWindow.params.syntheticVelocityY = velocity.y;
@@ -197,7 +170,7 @@ async function main() {
           )
           : output;
         await page.screenshot({
-          path: frameOutput as `${string}.png`,
+          path: frameOutput,
           type: "png",
           clip: { x: 0, y: 0, width: SIZE, height: SIZE },
         });
@@ -210,8 +183,8 @@ async function main() {
     }
   } finally {
     await browser.close();
-    await server.shutdown();
+    await new Promise((done) => server.close(done));
   }
 }
 
-if (import.meta.main) await main();
+await main();

@@ -4,3 +4,4 @@ in/
 site/
 .DS_Store
 out/
+node_modules/
