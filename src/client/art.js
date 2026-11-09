@@ -1,7 +1,6 @@
 // synthetic velocity: 2D source forms → reflective 3D pipes → temporal shutter shader
 import * as THREE from "https://esm.sh/three@0.171.0";
 import { SVGLoader } from "https://esm.sh/three@0.171.0/examples/jsm/loaders/SVGLoader.js";
-import { OrbitControls } from "https://esm.sh/three@0.171.0/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/environments/RoomEnvironment.js";
 
 (() => {
@@ -18,7 +17,16 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     powerPreference: "high-performance",
   });
   renderer.setClearColor(0x000000, 1);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.1));
+  const urlParams = new URLSearchParams(window.location.search);
+  const printMode = urlParams.has("print");
+  // Interactive mode caps DPR for performance. Print/export mode must render
+  // at the browser's full device pixel ratio, otherwise Chrome screenshots just
+  // upscale a lower-resolution WebGL canvas.
+  renderer.setPixelRatio(
+    printMode
+      ? Math.min(window.devicePixelRatio || 1, 8)
+      : Math.min(window.devicePixelRatio || 1, 1.1),
+  );
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.1;
@@ -29,19 +37,14 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
-  camera.position.set(0, 0, 8.5);
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = false;
-  controls.dampingFactor = 0;
-  controls.enablePan = true;
-  controls.enableZoom = true;
-  controls.minDistance = 0.8;
-  controls.maxDistance = 60;
-  controls.target.set(0, 0, 0);
-  controls.update();
+  const printCameraZ = Number(urlParams.get("printZ") || 24);
+  camera.position.set(0, 0, printMode ? printCameraZ : 4.25);
 
   const root = new THREE.Group();
+  const printOffsetX = printMode ? Number(urlParams.get("printX") || 0) : 0;
+  const printOffsetY = printMode ? Number(urlParams.get("printY") || 0) : 0;
+  const printAutoCenter = printMode && urlParams.get("printCenter") !== "0";
+  root.position.set(printOffsetX, printOffsetY, 0);
   scene.add(root);
 
   const params = {
@@ -70,7 +73,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     tiltY: 0.0,
     spinSpeed: 0.0,
     trailEnabled: 1,
-    trailMotion: -0.018,
+    trailMotion: printMode ? 0 : -0.018,
     syntheticTrail: 1,
     syntheticVelocityX: -0.064,
     syntheticVelocityY: 0.024,
@@ -80,7 +83,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     sampleCount: 52,
     blurStrength: 1.0,
     velocityScale: 0.506,
-    brightnessPersistence: 1.049,
+    brightnessPersistence: 1.0,
     historyDecay: 0.908,
     motionThreshold: 0.0,
     highlightThreshold: 1.5,
@@ -134,6 +137,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     uniform sampler2D tHistory;
     uniform sampler2D tVelocity;
     uniform vec2 resolution;
+    uniform vec2 fullResolution;
+    uniform vec2 tileOrigin;
     uniform float deltaTime;
     uniform float persistence;
     uniform float trailLength;
@@ -182,6 +187,10 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       return smoothstep(0.015, 0.09, abs(c - n));
     }
 
+    vec2 localUvFromFullUv(vec2 fullUv) {
+      return (fullUv * fullResolution - tileOrigin) / resolution;
+    }
+
     vec3 trailSource(sampler2D tex, vec2 uv) {
       vec3 color = texture2D(tex, uv).rgb;
       float lum = luma(color);
@@ -195,6 +204,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
 
     void main() {
       vec2 uv = vUv;
+      vec2 fullUv = (tileOrigin + uv * resolution) / fullResolution;
+      vec2 fullPixel = tileOrigin + uv * resolution;
       vec3 current = texture2D(tCurrent, uv).rgb;
       vec3 rawHistory = texture2D(tHistory, uv).rgb;
       vec4 velocitySample = texture2D(tVelocity, uv);
@@ -226,12 +237,12 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         float n = taps > 1 ? float(i) / float(taps - 1) : 0.0;
         float temporal = pow(n, 1.22);
         float ghostPulse = 0.58 + 0.42 * pow(0.5 + 0.5 * cos(n * 18.8495559), 7.0);
-        float jitter = hash12(uv * resolution * 0.012 + vec2(float(i) * 19.17, frameIndex * 0.071)) - 0.5;
-        vec2 opticalWobble = perpendicular * jitter * organicJitter / max(resolution.y, 1.0) * 5.0;
+        float jitter = hash12(fullPixel * 0.012 + vec2(float(i) * 19.17, frameIndex * 0.071)) - 0.5;
+        vec2 opticalWobble = perpendicular * jitter * organicJitter / max(fullResolution.y, 1.0) * 5.0;
         float highlightHere = smoothstep(highlightThreshold, 1.15, luma(rawHistory));
-        vec2 sampleUv = uv - velocity * temporal * trailLength * (1.0 + highlightHere * 0.28) + opticalWobble;
+        vec2 sampleUv = localUvFromFullUv(fullUv - velocity * temporal * trailLength * (1.0 + highlightHere * 0.28) + opticalWobble);
         vec3 h = trailSource(tHistory, sampleUv);
-        vec3 c = trailSource(tCurrent, uv + velocity * temporal * trailLength * 0.34 + opticalWobble);
+        vec3 c = trailSource(tCurrent, localUvFromFullUv(fullUv + velocity * temporal * trailLength * 0.34 + opticalWobble));
         float weight = exp(-temporal * 3.35) * ghostPulse;
         // Bright/specular details behave as stronger long-exposure records.
         float highlightBoost = 1.0 + smoothstep(highlightThreshold, 1.0, luma(max(h, c))) * (brightnessPersistence - 1.0);
@@ -320,6 +331,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
           tHistory: { value: null },
           tVelocity: { value: null },
           resolution: { value: new THREE.Vector2(1, 1) },
+          fullResolution: { value: new THREE.Vector2(1, 1) },
+          tileOrigin: { value: new THREE.Vector2(0, 0) },
           deltaTime: { value: 1 / 60 },
           persistence: { value: 0.88 },
           trailLength: { value: 1.0 },
@@ -456,7 +469,27 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         scaledWidth,
         scaledHeight,
       );
+      this.accumulationMaterial.uniforms.fullResolution.value.set(
+        scaledWidth,
+        scaledHeight,
+      );
+      this.accumulationMaterial.uniforms.tileOrigin.value.set(0, 0);
       this.reset();
+    }
+
+    setTile(
+      originX = 0,
+      originY = 0,
+      fullWidth = this.width,
+      fullHeight = this.height,
+    ) {
+      const u = this.accumulationMaterial.uniforms;
+      const historyScale = this.options.historyScale ?? 1.0;
+      u.tileOrigin.value.set(originX * historyScale, originY * historyScale);
+      u.fullResolution.value.set(
+        fullWidth * historyScale,
+        fullHeight * historyScale,
+      );
     }
 
     reset() {
@@ -681,10 +714,20 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
   let lastSvg = null;
   let spinAngle = 0;
   let renderQueued = false;
+  let printTileMode = false;
   let lastRenderTime = performance.now();
   let velocityMouseBinding = false;
   let lastMouseX = window.innerWidth / 2;
   let lastMouseY = window.innerHeight / 2;
+  const interactiveMinCameraZ = 1.5;
+  const interactiveMaxCameraZ = 80;
+  const objectFlickDamping = 1.65;
+  const objectFlickRestVelocity = 0.025;
+  let objectSpinY = 0;
+  let objectSpinVelocityY = 0;
+  const activeTouchPoints = new Map();
+  let lastPinchDistance = null;
+  let lastTouchZoomY = null;
   const controlHandles = new Map();
 
   function setControlValue(key, value) {
@@ -692,6 +735,78 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     if (!handle) return;
     handle.input.value = String(value);
     handle.output.textContent = Number(value).toFixed(3);
+  }
+
+  function applyInteractiveZoom(nextZ) {
+    if (printMode) return;
+    const clampedZ = THREE.MathUtils.clamp(
+      nextZ,
+      interactiveMinCameraZ,
+      interactiveMaxCameraZ,
+    );
+    if (Math.abs(clampedZ - camera.position.z) < 0.0001) return;
+    camera.position.z = clampedZ;
+    camera.updateMatrixWorld(true);
+    trails.reset();
+    lastRenderTime = performance.now();
+    requestRender();
+  }
+
+  function zoomByScale(scale) {
+    if (!Number.isFinite(scale) || scale <= 0) return;
+    applyInteractiveZoom(camera.position.z * scale);
+  }
+
+  function normalizedWheelDelta(event) {
+    if ("deltaY" in event && Number.isFinite(event.deltaY)) {
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 42
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? Math.max(window.innerHeight, 1)
+        : 1;
+      return event.deltaY * unit;
+    }
+    if ("wheelDelta" in event && Number.isFinite(event.wheelDelta)) {
+      return -event.wheelDelta;
+    }
+    return 0;
+  }
+
+  function handleZoomWheel(event) {
+    if (printMode || event.target?.closest?.(".abstract-control-panel")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const delta = normalizedWheelDelta(event);
+    if (!delta) return;
+    zoomByScale(Math.exp(delta * 0.00125));
+  }
+
+  function objectFlickActive() {
+    return Math.abs(objectSpinVelocityY) > 0;
+  }
+
+  function triggerObjectFlick() {
+    if (printMode) return;
+    const side = lastMouseX < window.innerWidth / 2 ? -1 : 1;
+    objectSpinVelocityY += side * 8.8;
+    lastRenderTime = performance.now();
+    requestRender();
+  }
+
+  function resetObjectFlick() {
+    objectSpinY = 0;
+    objectSpinVelocityY = 0;
+  }
+
+  window.__syntheticVelocityFlick = triggerObjectFlick;
+  window.__syntheticVelocityToggleSpin = triggerObjectFlick;
+  window.addEventListener("synthetic-velocity-flick", triggerObjectFlick);
+  window.addEventListener("synthetic-velocity-toggle-spin", triggerObjectFlick);
+
+  function touchDistance() {
+    if (activeTouchPoints.size < 2) return null;
+    const points = Array.from(activeTouchPoints.values()).slice(0, 2);
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
   }
 
   function applyMouseVelocity(clientX = lastMouseX, clientY = lastMouseY) {
@@ -715,6 +830,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
 
   function renderFrame(now = performance.now()) {
     renderQueued = false;
+    if (printTileMode) return;
     const deltaTime = Math.min(
       Math.max((now - lastRenderTime) / 1000, 1 / 240),
       1 / 12,
@@ -722,15 +838,22 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     lastRenderTime = now;
 
     if (currentGroup) {
-      // Keep the pipe steady. The slow-shutter language is generated in the
-      // accumulation shader, not by visibly spinning or drifting the mesh.
+      // Keep the default pipe steady. Deliberate flicks add damped Y-axis
+      // angular momentum, like swiping the object around its vertical axis.
       spinAngle += deltaTime * params.trailMotion;
+      if (objectFlickActive()) {
+        objectSpinY += objectSpinVelocityY * deltaTime;
+        const damping = Math.exp(-objectFlickDamping * deltaTime);
+        objectSpinVelocityY *= damping;
+        if (Math.abs(objectSpinVelocityY) < objectFlickRestVelocity) {
+          objectSpinVelocityY = 0;
+        }
+      }
       currentGroup.rotation.x = params.tiltX;
-      currentGroup.rotation.y = params.tiltY + spinAngle;
+      currentGroup.rotation.y = params.tiltY + spinAngle + objectSpinY;
       currentGroup.position.set(0, 0, 0);
     }
 
-    controls.update();
     trails.setOptions(params);
 
     if (params.trailEnabled > 0) {
@@ -743,7 +866,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
 
     if (
       params.trailEnabled > 0 || params.trailMotion !== 0 ||
-      params.syntheticTrail > 0
+      params.syntheticTrail > 0 || objectFlickActive()
     ) requestRender();
   }
 
@@ -788,7 +911,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     trails.setOptions(params);
     if (currentGroup && params.trailMotion === 0) {
       currentGroup.rotation.x = params.tiltX;
-      currentGroup.rotation.y = params.tiltY + spinAngle;
+      currentGroup.rotation.y = params.tiltY + spinAngle + objectSpinY;
     }
     if (rebuild && lastSvg) updateScene(lastSvg);
     requestRender();
@@ -798,23 +921,60 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     const panel = document.createElement("details");
     panel.className = "abstract-control-panel";
     panel.open = true;
-    panel.dataset.forceHidden = window.__syntheticVelocityControlsVisible
-      ? "false"
-      : "true";
-    panel.style.display = window.__syntheticVelocityControlsVisible
-      ? "block"
-      : "none";
+    const initialControlMode = window.__syntheticVelocityControlsMode || 0;
+    panel.dataset.forceHidden = initialControlMode === 0 ? "true" : "false";
+    panel.dataset.controlMode = initialControlMode === 2 ? "all" : "normal";
+    panel.style.display = initialControlMode === 0 ? "none" : "block";
     panel.innerHTML =
       `<summary><span>3D PIPE CONTROLS</span><span>▾</span></summary><div class="abstract-control-body"></div>`;
     const body = panel.querySelector(".abstract-control-body");
     const controls = [
-      ["syntheticVelocityX", "fake vel x", -0.08, 0.08, 0.001, false],
-      ["syntheticVelocityY", "fake vel y", -0.08, 0.08, 0.001, false],
-      ["brightnessPersistence", "bright persist", 0.5, 2.4, 0.001, false],
+      ["syntheticVelocityX", "fake vel x", -0.08, 0.08, 0.001, false, "normal"],
+      ["syntheticVelocityY", "fake vel y", -0.08, 0.08, 0.001, false, "normal"],
+      [
+        "brightnessPersistence",
+        "bright persist",
+        0.5,
+        2.4,
+        0.001,
+        false,
+        "normal",
+      ],
+      ["pipeRadius", "pipe radius", 0.004, 0.06, 0.001, true, "advanced"],
+      ["metalness", "metalness", 0, 1, 0.01, false, "advanced"],
+      ["roughness", "roughness", 0, 0.8, 0.001, false, "advanced"],
+      ["reflectionOnly", "reflect only", 0, 1, 0.01, false, "advanced"],
+      ["pipeOpacity", "pipe opacity", 0, 1, 0.01, false, "advanced"],
+      ["exposure", "exposure", 0, 1.5, 0.001, false, "advanced"],
+      ["pinkLight", "pink light", 0, 5, 0.05, false, "advanced"],
+      ["blueLight", "blue light", 0, 5, 0.05, false, "advanced"],
+      ["spinSpeed", "spin angle", -3.14, 3.14, 0.001, false, "advanced"],
+      ["trailEnabled", "trails on", 0, 1, 1, false, "advanced"],
+      ["trailMotion", "real motion", -1.4, 1.4, 0.001, false, "advanced"],
+      ["syntheticTrail", "fake motion", 0, 1, 0.001, false, "advanced"],
+      ["trailLength", "trail length", 0, 5, 0.001, false, "advanced"],
+      ["trailOpacity", "trail opacity", 0, 1.5, 0.001, false, "advanced"],
+      ["sampleCount", "samples", 1, 64, 1, false, "advanced"],
+      ["blurStrength", "smear", 0, 1, 0.001, false, "advanced"],
+      ["velocityScale", "velocity", 0, 4, 0.001, false, "advanced"],
+      ["historyDecay", "history decay", 0, 4, 0.001, false, "advanced"],
+      ["motionThreshold", "motion gate", 0, 0.3, 0.001, false, "advanced"],
+      [
+        "highlightThreshold",
+        "highlight gate",
+        0,
+        1.5,
+        0.001,
+        false,
+        "advanced",
+      ],
+      ["organicJitter", "organic jitter", 0, 2, 0.001, false, "advanced"],
+      ["trailBlendMode", "blend mode", 0, 2, 1, false, "advanced"],
     ];
-    for (const [key, label, min, max, step, rebuild] of controls) {
+    for (const [key, label, min, max, step, rebuild, tier] of controls) {
       const row = document.createElement("label");
       row.className = "abstract-control-row";
+      row.dataset.controlTier = tier;
       row.innerHTML =
         `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${
           params[key]
@@ -1092,6 +1252,222 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     addPipe(group, subPath.getPoints(240), box);
   }
 
+  function projectedGroupBounds(group) {
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    root.updateMatrixWorld(true);
+    group.updateMatrixWorld(true);
+
+    const point = new THREE.Vector3();
+    const projected = new THREE.Vector3();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let samples = 0;
+
+    group.traverse((child) => {
+      const position = child.geometry?.attributes?.position;
+      if (!position) return;
+      const step = Math.max(1, Math.floor(position.count / 200000));
+      for (let i = 0; i < position.count; i += step) {
+        point.fromBufferAttribute(position, i).applyMatrix4(child.matrixWorld);
+        projected.copy(point).project(camera);
+        if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) {
+          continue;
+        }
+        minX = Math.min(minX, projected.x);
+        minY = Math.min(minY, projected.y);
+        maxX = Math.max(maxX, projected.x);
+        maxY = Math.max(maxY, projected.y);
+        samples++;
+      }
+    });
+
+    if (!samples) return null;
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      centerX: (minX + maxX) / 2,
+      centerY: (minY + maxY) / 2,
+    };
+  }
+
+  function centerPrintFraming() {
+    if (!printAutoCenter || !currentGroup) return;
+
+    const distance = Math.abs(camera.position.z - root.position.z);
+    const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) *
+      distance;
+    const halfWidth = halfHeight * camera.aspect;
+
+    for (let i = 0; i < 6; i++) {
+      const bounds = projectedGroupBounds(currentGroup);
+      if (!bounds) return;
+      root.position.x -= bounds.centerX * halfWidth;
+      root.position.y -= bounds.centerY * halfHeight;
+      if (
+        Math.abs(bounds.centerX) < 0.0005 && Math.abs(bounds.centerY) < 0.0005
+      ) break;
+    }
+
+    const finalBounds = projectedGroupBounds(currentGroup);
+    window.__syntheticVelocityPrintCenter = {
+      rootX: root.position.x,
+      rootY: root.position.y,
+      bounds: finalBounds,
+    };
+    console.info(
+      "[synthetic velocity print center]",
+      window.__syntheticVelocityPrintCenter,
+    );
+  }
+
+  window.__syntheticVelocityMeasureInk = () => {
+    const sampleSize = 256;
+    const sampleCanvas = document.createElement("canvas");
+    sampleCanvas.width = sampleSize;
+    sampleCanvas.height = sampleSize;
+    const ctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(canvas, 0, 0, sampleSize, sampleSize);
+    const data = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
+    let total = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let minX = sampleSize, minY = sampleSize, maxX = -1, maxY = -1;
+    for (let y = 0; y < sampleSize; y++) {
+      for (let x = 0; x < sampleSize; x++) {
+        const i = (y * sampleSize + x) * 4;
+        const luma = data[i] * 0.2126 + data[i + 1] * 0.7152 +
+          data[i + 2] * 0.0722;
+        const weight = Math.max(0, luma - 6);
+        if (weight <= 0) continue;
+        total += weight;
+        sumX += (x + 0.5) * weight;
+        sumY += (y + 0.5) * weight;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    if (total <= 0) return null;
+    const centerX = sumX / total / sampleSize;
+    const centerY = sumY / total / sampleSize;
+    return {
+      centerX,
+      centerY,
+      ndcX: centerX * 2 - 1,
+      ndcY: 1 - centerY * 2,
+      bounds: {
+        minX: minX / sampleSize,
+        minY: minY / sampleSize,
+        maxX: (maxX + 1) / sampleSize,
+        maxY: (maxY + 1) / sampleSize,
+      },
+      total,
+    };
+  };
+
+  window.__syntheticVelocityNudgePrint = (ndcX = 0, ndcY = 0) => {
+    const distance = Math.abs(camera.position.z - root.position.z);
+    const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) *
+      distance;
+    const halfWidth = halfHeight * camera.aspect;
+    root.position.x -= ndcX * halfWidth;
+    root.position.y -= ndcY * halfHeight;
+    trails.reset();
+    requestRender();
+    return { rootX: root.position.x, rootY: root.position.y };
+  };
+
+  window.__syntheticVelocityConfigurePrintTile = (tile) => {
+    printTileMode = false;
+    const fullWidth = Math.max(1, Number(tile?.fullWidth || window.innerWidth));
+    const fullHeight = Math.max(
+      1,
+      Number(tile?.fullHeight || window.innerHeight),
+    );
+    const x = Math.max(0, Number(tile?.x || 0));
+    const y = Math.max(0, Number(tile?.y || 0));
+    const width = Math.max(1, Number(tile?.width || window.innerWidth));
+    const height = Math.max(1, Number(tile?.height || window.innerHeight));
+
+    spinAngle = 0;
+    resetObjectFlick();
+    if (currentGroup) {
+      currentGroup.rotation.x = params.tiltX;
+      currentGroup.rotation.y = params.tiltY;
+    }
+    camera.aspect = fullWidth / fullHeight;
+    camera.setViewOffset(fullWidth, fullHeight, x, y, width, height);
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+    trails.setSize(
+      width * renderer.getPixelRatio(),
+      height * renderer.getPixelRatio(),
+      params.historyScale,
+    );
+    trails.setTile(x, y, fullWidth, fullHeight);
+    trails.reset();
+    lastRenderTime = performance.now();
+    requestRender();
+
+    const gl = renderer.getContext();
+    return {
+      canvasWidth: renderer.domElement.width,
+      canvasHeight: renderer.domElement.height,
+      drawingBufferWidth: gl.drawingBufferWidth,
+      drawingBufferHeight: gl.drawingBufferHeight,
+      pixelRatio: renderer.getPixelRatio(),
+      maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+      maxRenderbufferSize: gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),
+      maxViewportDims: Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS)),
+      rootX: root.position.x,
+      rootY: root.position.y,
+    };
+  };
+
+  window.__syntheticVelocityRenderPrintFrames = (frames = 12, dt = 1 / 60) => {
+    printTileMode = true;
+    spinAngle = 0;
+    resetObjectFlick();
+    if (currentGroup) {
+      currentGroup.rotation.x = params.tiltX;
+      currentGroup.rotation.y = params.tiltY;
+      currentGroup.position.set(0, 0, 0);
+    }
+    trails.setOptions(params);
+    trails.reset();
+    for (let i = 0; i < Math.max(1, Math.floor(frames)); i++) {
+      if (params.trailEnabled > 0) {
+        trails.render(dt);
+        trails.present();
+      } else {
+        renderer.setRenderTarget(null);
+        renderer.render(scene, camera);
+      }
+    }
+    return window.__syntheticVelocityMeasureInk?.();
+  };
+
+  window.__syntheticVelocityPrintInfo = () => {
+    const gl = renderer.getContext();
+    return {
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio,
+      canvasWidth: renderer.domElement.width,
+      canvasHeight: renderer.domElement.height,
+      drawingBufferWidth: gl.drawingBufferWidth,
+      drawingBufferHeight: gl.drawingBufferHeight,
+      pixelRatio: renderer.getPixelRatio(),
+      maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+      maxRenderbufferSize: gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),
+      maxViewportDims: Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS)),
+    };
+  };
+
   function buildSceneFromSvg(svg) {
     const box = centeredScaleBox(svg);
     const svgText = sanitizeSvg(svg, box);
@@ -1131,6 +1507,20 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     if (!svg) return;
     lastSvg = svg;
 
+    if (printMode) {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      camera.clearViewOffset();
+      camera.aspect = width / Math.max(height, 1);
+      camera.updateProjectionMatrix();
+      trails.setTile(
+        0,
+        0,
+        width * renderer.getPixelRatio(),
+        height * renderer.getPixelRatio(),
+      );
+    }
+
     const nextGroup = buildSceneFromSvg(svg);
     if (currentGroup) {
       root.remove(currentGroup);
@@ -1138,6 +1528,9 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     }
     currentGroup = nextGroup;
     root.add(currentGroup);
+    resetObjectFlick();
+    root.position.set(printOffsetX, printOffsetY, 0);
+    centerPrintFraming();
     trails.reset();
     console.info("[abstract 3d] loaded extruded scene", {
       children: currentGroup.children.length,
@@ -1161,6 +1554,12 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       height * renderer.getPixelRatio(),
       params.historyScale,
     );
+    trails.setTile(
+      0,
+      0,
+      width * renderer.getPixelRatio(),
+      height * renderer.getPixelRatio(),
+    );
     requestRender();
   }
 
@@ -1173,28 +1572,74 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     lastMouseY = event.clientY;
     if (velocityMouseBinding) applyMouseVelocity(lastMouseX, lastMouseY);
   });
+  window.addEventListener("wheel", handleZoomWheel, {
+    passive: false,
+    capture: true,
+  });
+  window.addEventListener("mousewheel", handleZoomWheel, {
+    passive: false,
+    capture: true,
+  });
   window.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
-    velocityMouseBinding = true;
+    event.preventDefault();
+    velocityMouseBinding = false;
     lastMouseX = event.clientX;
     lastMouseY = event.clientY;
-    applyMouseVelocity(lastMouseX, lastMouseY);
-  }, true);
+    if (event.pointerType === "touch") {
+      activeTouchPoints.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      lastPinchDistance = touchDistance();
+      lastTouchZoomY = event.clientY;
+    }
+  }, { capture: true, passive: false });
   window.addEventListener("pointermove", (event) => {
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+    event.preventDefault();
     lastMouseX = event.clientX;
     lastMouseY = event.clientY;
-    applyMouseVelocity(lastMouseX, lastMouseY);
-  }, true);
-  window.addEventListener("pointerup", (event) => {
-    if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
     velocityMouseBinding = false;
-  }, true);
-  window.addEventListener("pointercancel", (event) => {
+    if (event.pointerType === "touch") {
+      activeTouchPoints.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      const distance = touchDistance();
+      if (distance && lastPinchDistance) {
+        zoomByScale(lastPinchDistance / distance);
+        lastPinchDistance = distance;
+        lastTouchZoomY = event.clientY;
+        return;
+      }
+      lastPinchDistance = distance;
+      if (activeTouchPoints.size === 1 && lastTouchZoomY !== null) {
+        zoomByScale(Math.exp((event.clientY - lastTouchZoomY) * 0.006));
+      }
+      lastTouchZoomY = event.clientY;
+    }
+  }, { capture: true, passive: false });
+  function releaseTouchPoint(event) {
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+    if (event.pointerType === "touch") {
+      activeTouchPoints.delete(event.pointerId);
+    }
+    lastPinchDistance = touchDistance();
+    lastTouchZoomY = activeTouchPoints.size === 1
+      ? Array.from(activeTouchPoints.values())[0]?.y ?? null
+      : null;
     velocityMouseBinding = false;
-  }, true);
+  }
+  window.addEventListener("pointerup", releaseTouchPoint, true);
+  window.addEventListener("pointercancel", releaseTouchPoint, true);
   function handleArtworkKeys(event) {
+    if (event.key?.toLowerCase() === "s") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      triggerObjectFlick();
+      return;
+    }
     if (event.code !== "Space") return;
     event.preventDefault();
     event.stopPropagation();
@@ -1212,10 +1657,6 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
   window.addEventListener("keydown", handleArtworkKeys, true);
   document.addEventListener("keydown", handleArtworkKeys, true);
   window.addEventListener("resize", resize);
-  controls.addEventListener("change", () => {
-    trails.reset();
-    requestRender();
-  });
   window.addEventListener("beforeunload", () => trails.dispose());
 
   resize();

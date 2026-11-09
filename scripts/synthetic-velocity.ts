@@ -131,7 +131,10 @@ async function writeHostIndex(documents: string[]): Promise<void> {
   <style>
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; overscroll-behavior: none; }
     #preview { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; opacity: 0; pointer-events: none; }
-    .mobile-hit-zone { position: fixed; inset: 0; z-index: 80; background: transparent; touch-action: none; }
+    .abstract-shader-canvas { position: fixed !important; inset: 0 !important; z-index: 5 !important; width: 100vw !important; height: 100vh !important; display: block !important; background: #000 !important; }
+    .nav-zone { position: fixed; top: 0; bottom: 0; z-index: 70; width: 50vw; border: 0; padding: 0; margin: 0; background: transparent; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; outline: none; }
+    .nav-zone.left { left: 0; }
+    .nav-zone.right { right: 0; }
     .abstract-control-panel {
       position: fixed; right: 10px; top: 10px; z-index: 100;
       width: min(320px, calc(100vw - 20px));
@@ -142,6 +145,7 @@ async function writeHostIndex(documents: string[]): Promise<void> {
     }
     .abstract-control-panel[data-force-hidden="true"] { display: none !important; }
     .abstract-control-panel[data-force-hidden="false"] { display: block !important; }
+    .abstract-control-panel[data-control-mode="normal"] .abstract-control-row[data-control-tier="advanced"] { display: none !important; }
     .abstract-control-panel summary { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; cursor: pointer; user-select: none; }
     .abstract-control-body { display: grid; gap: 8px; max-height: calc(100vh - 70px); overflow: auto; padding: 0 10px 10px; }
     .abstract-control-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) 44px; align-items: center; gap: 8px; min-height: 22px; }
@@ -153,22 +157,29 @@ async function writeHostIndex(documents: string[]): Promise<void> {
 <body>
   <iframe id="preview" src="about:blank"></iframe>
   <select id="source-select" hidden>${options}</select>
-  <div id="mobile-hit-zone" class="mobile-hit-zone" aria-hidden="true"></div>
+  <button class="nav-zone left" id="prev-source" aria-label="previous form"></button>
+  <button class="nav-zone right" id="next-source" aria-label="next form"></button>
   <script type="module" src="./art.js"></script>
   <script>
     const iframe = document.getElementById('preview');
     const select = document.getElementById('source-select');
-    const mobileHitZone = document.getElementById('mobile-hit-zone');
-    window.__syntheticVelocityControlsVisible = false;
+    const prevSource = document.getElementById('prev-source');
+    const nextSource = document.getElementById('next-source');
+    window.__syntheticVelocityControlsMode = 0;
     document.body.tabIndex = -1;
     document.body.focus();
-    const toggleControls = () => {
-      window.__syntheticVelocityControlsVisible = !window.__syntheticVelocityControlsVisible;
+    const applyControlMode = () => {
       const panel = document.querySelector('.abstract-control-panel');
       if (!panel) return;
-      panel.dataset.forceHidden = window.__syntheticVelocityControlsVisible ? 'false' : 'true';
-      panel.style.display = window.__syntheticVelocityControlsVisible ? 'block' : 'none';
+      const mode = window.__syntheticVelocityControlsMode || 0;
+      panel.dataset.forceHidden = mode === 0 ? 'true' : 'false';
+      panel.dataset.controlMode = mode === 2 ? 'all' : 'normal';
+      panel.style.display = mode === 0 ? 'none' : 'block';
       panel.open = true;
+    };
+    const toggleControls = () => {
+      window.__syntheticVelocityControlsMode = ((window.__syntheticVelocityControlsMode || 0) + 1) % 3;
+      applyControlMode();
     };
     const showAt = (index) => {
       const count = select.options.length;
@@ -179,35 +190,50 @@ async function writeHostIndex(documents: string[]): Promise<void> {
     select.addEventListener('change', () => { iframe.src = select.value; });
     const flowchartIndex = Array.from(select.options).findIndex((option) => option.value.endsWith('/example-flowchart.html'));
     showAt(flowchartIndex >= 0 ? flowchartIndex : 0);
-    let touchStartX = 0;
-    let touchStartY = 0;
-    let touchStartTime = 0;
-    let controlsTouchTimer = 0;
-    mobileHitZone.addEventListener('pointerdown', (event) => {
-      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
-      touchStartX = event.clientX;
-      touchStartY = event.clientY;
-      touchStartTime = performance.now();
-      controlsTouchTimer = window.setTimeout(() => toggleControls(), 650);
-    }, true);
-    mobileHitZone.addEventListener('pointermove', (event) => {
-      if (Math.hypot(event.clientX - touchStartX, event.clientY - touchStartY) > 16) window.clearTimeout(controlsTouchTimer);
-    }, true);
-    mobileHitZone.addEventListener('pointerup', (event) => {
-      window.clearTimeout(controlsTouchTimer);
-      const dx = event.clientX - touchStartX;
-      const dy = event.clientY - touchStartY;
-      const dt = performance.now() - touchStartTime;
-      if (dt < 700 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-        showAt(select.selectedIndex + (dx < 0 ? 1 : -1));
+    let navTapTimer = 0;
+    let lastNavTap = { time: 0, x: 0, y: 0 };
+    const navPointers = new Map();
+    const flickObject = () => window.dispatchEvent(new Event('synthetic-velocity-flick'));
+    const handleNavPointerDown = (event) => {
+      event.preventDefault();
+      navPointers.set(event.pointerId, { x: event.clientX || 0, y: event.clientY || 0 });
+    };
+    const handleNavPointerUp = (direction, event) => {
+      event.preventDefault();
+      const start = navPointers.get(event.pointerId);
+      navPointers.delete(event.pointerId);
+      const x = event.clientX || 0;
+      const y = event.clientY || 0;
+      if (start && Math.hypot(x - start.x, y - start.y) > 18) return;
+      const now = performance.now();
+      const isDoubleTap = now - lastNavTap.time < 420 && Math.hypot(x - lastNavTap.x, y - lastNavTap.y) < 64;
+      lastNavTap = { time: now, x, y };
+      if (isDoubleTap) {
+        clearTimeout(navTapTimer);
+        navTapTimer = 0;
+        flickObject();
+        return;
       }
-    }, true);
-    mobileHitZone.addEventListener('pointercancel', () => window.clearTimeout(controlsTouchTimer), true);
+      clearTimeout(navTapTimer);
+      navTapTimer = setTimeout(() => showAt(select.selectedIndex + direction), 360);
+    };
+    for (const [button, direction] of [[prevSource, -1], [nextSource, 1]]) {
+      button.addEventListener('pointerdown', handleNavPointerDown, { passive: false });
+      button.addEventListener('pointerup', (event) => handleNavPointerUp(direction, event), { passive: false });
+      button.addEventListener('pointercancel', (event) => navPointers.delete(event.pointerId));
+      button.addEventListener('click', (event) => event.preventDefault());
+    }
     const handleHostKeys = (event) => {
       if (event.key === 'Tab') {
         event.preventDefault();
         event.stopImmediatePropagation();
         toggleControls();
+        return;
+      }
+      if (event.key?.toLowerCase() === 's') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        flickObject();
         return;
       }
       if (event.key === 'ArrowLeft') {
