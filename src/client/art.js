@@ -29,7 +29,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
-  camera.position.set(0, 0, 17.0);
+  camera.position.set(0, 0, 8.5);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = false;
