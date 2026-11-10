@@ -124,6 +124,9 @@ async function writeHostIndex(documents) {
     .nav-zone { position: fixed; top: 0; bottom: 0; z-index: 70; width: 50vw; border: 0; padding: 0; margin: 0; background: transparent; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; outline: none; }
     .nav-zone.left { left: 0; }
     .nav-zone.right { right: 0; }
+    .diagram-square { position: fixed; top: 50%; left: 50%; z-index: 80; width: 80vmin; height: 80vmin; transform: translate(-50%, -50%); box-sizing: border-box; padding: 4vmin; background: #000; display: none; pointer-events: none; }
+    .diagram-square[data-visible="true"] { display: block; }
+    .diagram-square img { display: block; width: 100%; height: 100%; object-fit: contain; }
     .abstract-control-panel {
       position: fixed; right: 10px; top: 10px; z-index: 100;
       width: min(320px, calc(100vw - 20px));
@@ -148,6 +151,7 @@ async function writeHostIndex(documents) {
   <select id="source-select" hidden>${options}</select>
   <button class="nav-zone left" id="prev-source" aria-label="previous form"></button>
   <button class="nav-zone right" id="next-source" aria-label="next form"></button>
+  <div class="diagram-square" id="diagram-square" data-visible="false" aria-hidden="true"><img id="diagram-square-img" alt=""></div>
   <script type="module" src="./art.js"></script>
   <script>
     const iframe = document.getElementById('preview');
@@ -212,7 +216,77 @@ async function writeHostIndex(documents) {
       button.addEventListener('pointercancel', (event) => navPointers.delete(event.pointerId));
       button.addEventListener('click', (event) => event.preventDefault());
     }
+    // d: black square with the current source diagram's SVG. The SVG is cloned
+    // with its computed styles inlined (page CSS and fonts don't travel with it)
+    // and shown as an <img>, so its ids and styles stay isolated from this page.
+    const diagramSquare = document.getElementById('diagram-square');
+    const diagramSquareImg = document.getElementById('diagram-square-img');
+    const INLINE_STYLE_PROPS = [
+      'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity',
+      'stroke-dasharray', 'stroke-dashoffset', 'stroke-linecap', 'stroke-linejoin',
+      'opacity', 'visibility', 'display', 'color', 'font-family', 'font-size',
+      'font-weight', 'font-style', 'letter-spacing', 'text-anchor', 'dominant-baseline',
+      'text-transform', 'stop-color', 'stop-opacity',
+    ];
+    let diagramSquareUrl = '';
+    const renderDiagramSquare = () => {
+      let svg = null;
+      try {
+        svg = iframe.contentDocument?.querySelector('svg') || null;
+      } catch (_) {
+        svg = null;
+      }
+      if (diagramSquareUrl) URL.revokeObjectURL(diagramSquareUrl);
+      diagramSquareUrl = '';
+      if (!svg) {
+        diagramSquareImg.removeAttribute('src');
+        return;
+      }
+      const clone = svg.cloneNode(true);
+      const sourceNodes = [svg, ...svg.querySelectorAll('*')];
+      const cloneNodes = [clone, ...clone.querySelectorAll('*')];
+      const view = svg.ownerDocument.defaultView;
+      sourceNodes.forEach((node, index) => {
+        const computed = view.getComputedStyle(node);
+        const target = cloneNodes[index];
+        const declarations = INLINE_STYLE_PROPS
+          .map((prop) => prop + ':' + computed.getPropertyValue(prop))
+          .join(';');
+        target.setAttribute('style', declarations + ';' + (target.getAttribute('style') || ''));
+      });
+      const box = svg.viewBox?.baseVal;
+      const rect = svg.getBoundingClientRect();
+      const width = box && box.width ? box.width : rect.width || 1000;
+      const height = box && box.height ? box.height : rect.height || 1000;
+      if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('width', String(width));
+      clone.setAttribute('height', String(height));
+      clone.style.display = 'block';
+      // HTML-parsed comments may contain "--", which is invalid XML.
+      const comments = document.createTreeWalker(clone, NodeFilter.SHOW_COMMENT);
+      const commentNodes = [];
+      while (comments.nextNode()) commentNodes.push(comments.currentNode);
+      commentNodes.forEach((node) => node.remove());
+      const markup = new XMLSerializer().serializeToString(clone);
+      diagramSquareUrl = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
+      diagramSquareImg.src = diagramSquareUrl;
+    };
+    const toggleDiagramSquare = () => {
+      const visible = diagramSquare.dataset.visible !== 'true';
+      diagramSquare.dataset.visible = visible ? 'true' : 'false';
+      if (visible) renderDiagramSquare();
+    };
+    iframe.addEventListener('load', () => {
+      if (diagramSquare.dataset.visible === 'true') renderDiagramSquare();
+    });
     const handleHostKeys = (event) => {
+      if (event.key?.toLowerCase() === 'd' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!event.repeat) toggleDiagramSquare();
+        return;
+      }
       if (event.key === 'Tab') {
         event.preventDefault();
         event.stopImmediatePropagation();
