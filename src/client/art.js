@@ -1143,6 +1143,15 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         node.setAttribute("stroke", "#ffffff");
         node.setAttribute("stroke-width", "1");
       });
+    // HTML-parsed comments may contain "--", which is invalid XML and makes
+    // SVGLoader's DOMParser stop early, silently dropping later shapes.
+    const comments = clone.ownerDocument.createTreeWalker(
+      clone,
+      NodeFilter.SHOW_COMMENT,
+    );
+    const commentNodes = [];
+    while (comments.nextNode()) commentNodes.push(comments.currentNode);
+    commentNodes.forEach((node) => node.remove());
     return new XMLSerializer().serializeToString(clone);
   }
 
@@ -1471,6 +1480,9 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
   function buildSceneFromSvg(svg) {
     const box = centeredScaleBox(svg);
     const svgText = sanitizeSvg(svg, box);
+    // The exact 2D shape the pipes are built from (white outlines, no text or
+    // background); the host page's "d" overlay displays it.
+    window.__syntheticVelocityShapeSvg = svgText;
     const data = loader.parse(svgText);
     const group = new THREE.Group();
 
@@ -1540,6 +1552,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         0,
       ),
     });
+    window.dispatchEvent(new Event("synthetic-velocity-scene"));
     requestRender();
   }
 
