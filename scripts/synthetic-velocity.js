@@ -160,7 +160,7 @@ async function writeHostIndex(documents) {
     .diagram-tile { box-sizing: border-box; margin: 0; padding: 6%; border: 0; background: transparent; cursor: pointer; opacity: .28; outline: none; -webkit-tap-highlight-color: transparent; }
     .diagram-tile:hover { opacity: .6; }
     .diagram-tile[aria-current="true"] { opacity: 1; }
-    .grid-toggle { position: fixed; left: 4px; bottom: 4px; z-index: 95; width: 40px; height: 40px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    .grid-toggle { position: fixed; right: 4px; bottom: 4px; z-index: 95; width: 40px; height: 40px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
     .grid-toggle::before { content: ""; position: absolute; left: 12px; top: 12px; box-sizing: border-box; width: 16px; height: 16px; border: 1px solid #fff; border-radius: 50%; opacity: .6; }
     .grid-toggle:hover::before, .grid-toggle[aria-expanded="true"]::before { opacity: 1; }
     .grid-toggle[aria-expanded="true"]::before { background: #fff; }
