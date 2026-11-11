@@ -157,9 +157,9 @@ async function writeHostIndex(documents) {
     .nav-zone.right { right: 0; }
     .diagram-grid { position: fixed; inset: 0; z-index: 90; background: #000; display: none; place-content: center; grid-template-columns: repeat(var(--cols, 16), var(--tile, 60px)); grid-auto-rows: var(--tile, 60px); gap: var(--gap, 4px); }
     .diagram-grid[data-visible="true"] { display: grid; }
-    .diagram-tile { box-sizing: border-box; margin: 0; padding: 6%; border: 1px solid transparent; background: transparent; cursor: pointer; opacity: .28; outline: none; -webkit-tap-highlight-color: transparent; }
+    .diagram-tile { box-sizing: border-box; margin: 0; padding: 6%; border: 0; background: transparent; cursor: pointer; opacity: .28; outline: none; -webkit-tap-highlight-color: transparent; }
     .diagram-tile:hover { opacity: .6; }
-    .diagram-tile[aria-current="true"] { opacity: 1; border-color: #fff; }
+    .diagram-tile[aria-current="true"] { opacity: 1; }
     .diagram-tile img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
     .abstract-control-panel {
       position: fixed; right: 10px; top: 10px; z-index: 100;
