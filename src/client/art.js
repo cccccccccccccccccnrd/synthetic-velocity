@@ -136,6 +136,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     uniform sampler2D tCurrent;
     uniform sampler2D tHistory;
     uniform sampler2D tVelocity;
+    uniform sampler2D tCurrentInk;
+    uniform sampler2D tHistoryInk;
     uniform vec2 resolution;
     uniform vec2 fullResolution;
     uniform vec2 tileOrigin;
@@ -158,6 +160,9 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     uniform float frameIndex;
 
     const int MAX_SAMPLES = 64;
+    // Per-tap (temporal offset, weight); depends only on the tap index, so it
+    // is computed once on the CPU (see MotionTrailPass.updateTaps).
+    uniform vec2 taps[MAX_SAMPLES];
 
     float luma(vec3 color) {
       return dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -175,32 +180,13 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       return color / (vec3(1.0) + max(color - 1.0, 0.0) * 0.55);
     }
 
-    float edgeAt(sampler2D tex, vec2 uv) {
-      vec2 px = 1.0 / max(resolution, vec2(1.0));
-      float c = luma(texture2D(tex, uv).rgb);
-      float n = 0.25 * (
-        luma(texture2D(tex, uv + vec2(px.x, 0.0)).rgb) +
-        luma(texture2D(tex, uv - vec2(px.x, 0.0)).rgb) +
-        luma(texture2D(tex, uv + vec2(0.0, px.y)).rgb) +
-        luma(texture2D(tex, uv - vec2(0.0, px.y)).rgb)
-      );
-      return smoothstep(0.015, 0.09, abs(c - n));
-    }
-
     vec2 localUvFromFullUv(vec2 fullUv) {
       return (fullUv * fullResolution - tileOrigin) / resolution;
     }
 
-    vec3 trailSource(sampler2D tex, vec2 uv) {
-      vec3 color = texture2D(tex, uv).rgb;
-      float lum = luma(color);
-      float edge = edgeAt(tex, uv);
-      float highlight = smoothstep(highlightThreshold, 1.0, lum);
-      // Use edges and specular ridges as the exposed material. Avoid dragging
-      // broad mid-grey surfaces through the frame, which makes the image flat.
-      float photographicInk = clamp(edge * 1.15 + highlight * 0.85, 0.0, 1.0);
-      return color * photographicInk;
-    }
+    // Edge+highlight "ink" of tCurrent / tHistory, precomputed by the ink pass.
+    vec3 currentInk(vec2 uv) { return texture2D(tCurrentInk, uv).rgb; }
+    vec3 historyInk(vec2 uv) { return texture2D(tHistoryInk, uv).rgb; }
 
     void main() {
       vec2 uv = vUv;
@@ -231,19 +217,17 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       // perfectly averaged video-game blur.
       vec3 trail = vec3(0.0);
       float totalWeight = 0.0;
-      int taps = clamp(sampleCount, 1, MAX_SAMPLES);
+      int tapCount = clamp(sampleCount, 1, MAX_SAMPLES);
+      float highlightHere = smoothstep(highlightThreshold, 1.15, luma(rawHistory));
       for (int i = 0; i < MAX_SAMPLES; i++) {
-        if (i >= taps) break;
-        float n = taps > 1 ? float(i) / float(taps - 1) : 0.0;
-        float temporal = pow(n, 1.22);
-        float ghostPulse = 0.58 + 0.42 * pow(0.5 + 0.5 * cos(n * 18.8495559), 7.0);
+        if (i >= tapCount) break;
+        float temporal = taps[i].x;
         float jitter = hash12(fullPixel * 0.012 + vec2(float(i) * 19.17, frameIndex * 0.071)) - 0.5;
         vec2 opticalWobble = perpendicular * jitter * organicJitter / max(fullResolution.y, 1.0) * 5.0;
-        float highlightHere = smoothstep(highlightThreshold, 1.15, luma(rawHistory));
         vec2 sampleUv = localUvFromFullUv(fullUv - velocity * temporal * trailLength * (1.0 + highlightHere * 0.28) + opticalWobble);
-        vec3 h = trailSource(tHistory, sampleUv);
-        vec3 c = trailSource(tCurrent, localUvFromFullUv(fullUv + velocity * temporal * trailLength * 0.34 + opticalWobble));
-        float weight = exp(-temporal * 3.35) * ghostPulse;
+        vec3 h = historyInk(sampleUv);
+        vec3 c = currentInk(localUvFromFullUv(fullUv + velocity * temporal * trailLength * 0.34 + opticalWobble));
+        float weight = taps[i].y;
         // Bright/specular details behave as stronger long-exposure records.
         float highlightBoost = 1.0 + smoothstep(highlightThreshold, 1.0, luma(max(h, c))) * (brightnessPersistence - 1.0);
         trail += max(h, c * 0.55) * weight * highlightBoost;
@@ -251,7 +235,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       }
       trail /= max(totalWeight, 1e-4);
 
-      float trailMask = smoothstep(0.018, 0.20, luma(max(trail, trailSource(tHistory, uv) * 0.6)));
+      float trailMask = smoothstep(0.018, 0.20, luma(max(trail, historyInk(uv) * 0.6)));
       float movingMask = clamp(max(max(velocityMask, differenceMask), trailMask * syntheticTrail), 0.0, 1.0);
 
       float historyLuma = luma(max(rawHistory, trail));
@@ -262,7 +246,7 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       // trail pixels are allowed to appear outside the present pipe silhouette.
       localPersistence *= mix(0.12, 1.0, movingMask);
 
-      vec3 cleanedHistory = trailSource(tHistory, uv);
+      vec3 cleanedHistory = historyInk(uv);
       vec3 smearedHistory = mix(cleanedHistory, trail, blurStrength) * localPersistence * trailOpacity;
       vec3 alphaAccum = current * 0.92 + smearedHistory;
       vec3 additiveHighlights = alphaAccum + trail * highlightBoost * 0.18;
@@ -289,6 +273,46 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       if (debugView == 4) finalColor = vec3(movingMask);
 
       gl_FragColor = vec4(max(finalColor, 0.0), 1.0);
+    }
+  `;
+
+  // "Ink" prepass: the edge+highlight mask of a texture (what trailSource used to compute
+  // inside the accumulation loop), computed once per texel per frame. The
+  // accumulation loop samples this instead of re-running a 5-tap edge filter
+  // for each of its ~52 taps: same look, a fraction of the texture reads.
+  const INK_FRAGMENT_SHADER = `
+    precision highp float;
+
+    varying vec2 vUv;
+    uniform sampler2D tMap;
+    uniform vec2 resolution;
+    uniform float highlightThreshold;
+
+    float luma(vec3 color) {
+      return dot(color, vec3(0.2126, 0.7152, 0.0722));
+    }
+
+    float edgeAt(sampler2D tex, vec2 uv) {
+      vec2 px = 1.0 / max(resolution, vec2(1.0));
+      float c = luma(texture2D(tex, uv).rgb);
+      float n = 0.25 * (
+        luma(texture2D(tex, uv + vec2(px.x, 0.0)).rgb) +
+        luma(texture2D(tex, uv - vec2(px.x, 0.0)).rgb) +
+        luma(texture2D(tex, uv + vec2(0.0, px.y)).rgb) +
+        luma(texture2D(tex, uv - vec2(0.0, px.y)).rgb)
+      );
+      return smoothstep(0.015, 0.09, abs(c - n));
+    }
+
+    void main() {
+      vec3 color = texture2D(tMap, vUv).rgb;
+      float lum = luma(color);
+      float edge = edgeAt(tMap, vUv);
+      float highlight = smoothstep(highlightThreshold, 1.0, lum);
+      // Use edges and specular ridges as the exposed material. Avoid dragging
+      // broad mid-grey surfaces through the frame, which makes the image flat.
+      float photographicInk = clamp(edge * 1.15 + highlight * 0.85, 0.0, 1.0);
+      gl_FragColor = vec4(color * photographicInk, 1.0);
     }
   `;
 
@@ -330,6 +354,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
           tCurrent: { value: null },
           tHistory: { value: null },
           tVelocity: { value: null },
+          tCurrentInk: { value: null },
+          tHistoryInk: { value: null },
           resolution: { value: new THREE.Vector2(1, 1) },
           fullResolution: { value: new THREE.Vector2(1, 1) },
           tileOrigin: { value: new THREE.Vector2(0, 0) },
@@ -350,6 +376,21 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
           blendMode: { value: 0 },
           debugView: { value: 0 },
           frameIndex: { value: 0 },
+          taps: {
+            value: Array.from({ length: 64 }, () => new THREE.Vector2()),
+          },
+        },
+      });
+      this.tapCount = -1;
+      this.inkMaterial = new THREE.ShaderMaterial({
+        vertexShader: FULLSCREEN_VERTEX_SHADER,
+        fragmentShader: INK_FRAGMENT_SHADER,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+          tMap: { value: null },
+          resolution: { value: new THREE.Vector2(1, 1) },
+          highlightThreshold: { value: 0.38 },
         },
       });
       this.presentMaterial = new THREE.ShaderMaterial({
@@ -430,6 +471,24 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         u.debugView.value = Math.round(options.trailDebug ?? options.debugView);
       }
       if (options.quality) this.setQuality(options.quality);
+      this.updateTaps();
+    }
+
+    updateTaps() {
+      const count = this.accumulationMaterial.uniforms.sampleCount.value;
+      if (count === this.tapCount) return;
+      this.tapCount = count;
+      const taps = this.accumulationMaterial.uniforms.taps.value;
+      const used = THREE.MathUtils.clamp(count, 1, taps.length);
+      for (let i = 0; i < used; i++) {
+        // Nonlinear spacing and pulsed weights leave visible ghost silhouettes
+        // instead of a perfectly averaged video-game blur.
+        const n = used > 1 ? i / (used - 1) : 0;
+        const temporal = Math.pow(n, 1.22);
+        const ghostPulse = 0.58 +
+          0.42 * Math.pow(0.5 + 0.5 * Math.cos(n * 18.8495559), 7.0);
+        taps[i].set(temporal, Math.exp(-temporal * 3.35) * ghostPulse);
+      }
     }
 
     setSize(width, height, historyScale = this.options.historyScale ?? 1.0) {
@@ -443,6 +502,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
           this.velocityRenderTarget,
           this.historyRenderTargetA,
           this.historyRenderTargetB,
+          this.currentInkTarget,
+          this.historyInkTarget,
         ]
       ) {
         if (target) target.dispose();
@@ -463,6 +524,8 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         scaledHeight,
         false,
       );
+      this.currentInkTarget = this.makeTarget(this.width, this.height, false);
+      this.historyInkTarget = this.makeTarget(scaledWidth, scaledHeight, false);
       this.readHistory = this.historyRenderTargetA;
       this.writeHistory = this.historyRenderTargetB;
       this.accumulationMaterial.uniforms.resolution.value.set(
@@ -597,6 +660,10 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       this.renderVelocity();
 
       const u = this.accumulationMaterial.uniforms;
+      this.renderInk(this.currentRenderTarget, this.currentInkTarget);
+      this.renderInk(this.readHistory, this.historyInkTarget);
+      u.tCurrentInk.value = this.currentInkTarget.texture;
+      u.tHistoryInk.value = this.historyInkTarget.texture;
       u.tCurrent.value = this.currentRenderTarget.texture;
       u.tHistory.value = this.readHistory.texture;
       u.tVelocity.value = this.velocityRenderTarget.texture;
@@ -613,6 +680,18 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
       this.capturePreviousTransforms();
     }
 
+    renderInk(source, target) {
+      const iu = this.inkMaterial.uniforms;
+      const au = this.accumulationMaterial.uniforms;
+      iu.tMap.value = source.texture;
+      // Same texel step and threshold the accumulation pass used inline.
+      iu.resolution.value.copy(au.resolution.value);
+      iu.highlightThreshold.value = au.highlightThreshold.value;
+      this.fsQuad.material = this.inkMaterial;
+      this.renderer.setRenderTarget(target);
+      this.renderer.render(this.fsScene, this.fsCamera);
+    }
+
     present() {
       this.presentMaterial.uniforms.tMap.value = this.readHistory.texture;
       this.fsQuad.material = this.presentMaterial;
@@ -627,12 +706,15 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
           this.velocityRenderTarget,
           this.historyRenderTargetA,
           this.historyRenderTargetB,
+          this.currentInkTarget,
+          this.historyInkTarget,
         ]
       ) target?.dispose();
       for (const material of this.velocityMaterials.values()) {
         material.dispose();
       }
       this.accumulationMaterial.dispose();
+      this.inkMaterial.dispose();
       this.presentMaterial.dispose();
       this.fsQuad.geometry.dispose();
     }
