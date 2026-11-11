@@ -15,7 +15,7 @@ const CHROME = process.env.CHROME ??
 
 // White outlines on black, constant on-screen line width at any tile size.
 const SHAPE_STYLE =
-  "<style>* { fill: none !important; stroke: #fff !important; stroke-width: 0.75px !important; vector-effect: non-scaling-stroke; }</style>";
+  "<style>* { fill: none !important; stroke: #fff !important; stroke-width: 0.3px !important; vector-effect: non-scaling-stroke; }</style>";
 
 export async function writeShapes(siteDir, documents) {
   const outDir = join(siteDir, "shapes");
