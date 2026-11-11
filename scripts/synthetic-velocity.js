@@ -26,6 +26,8 @@ const SOURCES = [
     branch: "main",
     assetPath: "skills/diagram-design/assets",
     include: /^example.*\.html$|^index\.html$/,
+    // Animated diagrams are left out entirely.
+    exclude: /-animated\.html$/,
     // Upstream ships most diagrams as base + -dark/-full/-animated variants
     // with (nearly) the same shape. Keep one per diagram.
     variantSuffix: /-(dark|full|animated)(?=\.html$)/,
@@ -99,10 +101,19 @@ function collapseVariants(names, variantSuffix) {
   });
 }
 
-async function copyDirFiltered(sourceDir, outDir, include, variantSuffix) {
+async function copyDirFiltered(
+  sourceDir,
+  outDir,
+  include,
+  variantSuffix,
+  exclude,
+) {
   await mkdir(outDir, { recursive: true });
   const matched = (await readdir(sourceDir, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && include.test(entry.name))
+    .filter((entry) =>
+      entry.isFile() && include.test(entry.name) &&
+      !(exclude && exclude.test(entry.name))
+    )
     .map((entry) => entry.name)
     .sort();
   const copied = collapseVariants(matched, variantSuffix);
@@ -363,6 +374,7 @@ async function build(noFetch) {
       out,
       source.include,
       source.variantSuffix,
+      source.exclude,
     );
   }
 
