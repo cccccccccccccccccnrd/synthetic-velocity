@@ -26,6 +26,9 @@ const SOURCES = [
     branch: "main",
     assetPath: "skills/diagram-design/assets",
     include: /^example.*\.html$|^index\.html$/,
+    // Upstream ships most diagrams as base + -dark/-full/-animated variants
+    // with (nearly) the same shape. Keep one per diagram.
+    variantSuffix: /-(dark|full|animated)(?=\.html$)/,
   },
 ];
 
@@ -81,15 +84,31 @@ async function ensureSource(source, noFetch) {
   return repoDir;
 }
 
-async function copyDirFiltered(sourceDir, outDir, include) {
+// One file per diagram: the base version, or the first variant when upstream
+// has no base (e.g. example-queue-animated.html).
+function collapseVariants(names, variantSuffix) {
+  if (!variantSuffix) return names;
+  const available = new Set(names);
+  const keptBases = new Set();
+  return names.filter((name) => {
+    const base = name.replace(variantSuffix, "");
+    if (base !== name && available.has(base)) return false;
+    if (keptBases.has(base)) return false;
+    keptBases.add(base);
+    return true;
+  });
+}
+
+async function copyDirFiltered(sourceDir, outDir, include, variantSuffix) {
   await mkdir(outDir, { recursive: true });
-  const copied = [];
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !include.test(entry.name)) continue;
-    await copyFile(join(sourceDir, entry.name), join(outDir, entry.name));
-    copied.push(entry.name);
+  const matched = (await readdir(sourceDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && include.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  const copied = collapseVariants(matched, variantSuffix);
+  for (const name of copied) {
+    await copyFile(join(sourceDir, name), join(outDir, name));
   }
-  copied.sort();
   return copied;
 }
 
@@ -339,7 +358,12 @@ async function build(noFetch) {
     const repoDir = await ensureSource(source, noFetch);
     const sourceAssets = join(repoDir, source.assetPath);
     const out = join(tmpDir, "sources", source.id);
-    docs = await copyDirFiltered(sourceAssets, out, source.include);
+    docs = await copyDirFiltered(
+      sourceAssets,
+      out,
+      source.include,
+      source.variantSuffix,
+    );
   }
 
   await copyFile(join(CLIENT_DIR, "art.js"), join(tmpDir, "art.js"));
