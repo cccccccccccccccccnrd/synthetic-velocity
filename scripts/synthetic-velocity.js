@@ -160,6 +160,10 @@ async function writeHostIndex(documents) {
     .diagram-tile { box-sizing: border-box; margin: 0; padding: 6%; border: 0; background: transparent; cursor: pointer; opacity: .28; outline: none; -webkit-tap-highlight-color: transparent; }
     .diagram-tile:hover { opacity: .6; }
     .diagram-tile[aria-current="true"] { opacity: 1; }
+    .grid-toggle { position: fixed; left: 4px; bottom: 4px; z-index: 95; width: 40px; height: 40px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    .grid-toggle::before { content: ""; position: absolute; left: 12px; top: 12px; box-sizing: border-box; width: 16px; height: 16px; border: 1px solid #fff; border-radius: 50%; opacity: .6; }
+    .grid-toggle:hover::before, .grid-toggle[aria-expanded="true"]::before { opacity: 1; }
+    .grid-toggle[aria-expanded="true"]::before { background: #fff; }
     .diagram-tile img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
     .abstract-control-panel {
       position: fixed; right: 10px; top: 10px; z-index: 100;
@@ -186,6 +190,7 @@ async function writeHostIndex(documents) {
   <button class="nav-zone left" id="prev-source" aria-label="previous form"></button>
   <button class="nav-zone right" id="next-source" aria-label="next form"></button>
   <div class="diagram-grid" id="diagram-grid" data-visible="false" aria-hidden="true"></div>
+  <button class="grid-toggle" id="grid-toggle" aria-label="overview of all forms" aria-expanded="false"></button>
   <script type="module" src="./art.js"></script>
   <script>
     const iframe = document.getElementById('preview');
@@ -304,8 +309,17 @@ async function writeHostIndex(documents) {
       if (visible) buildDiagramGrid();
       diagramGrid.dataset.visible = visible ? 'true' : 'false';
       diagramGrid.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      gridToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
       if (visible) highlightDiagramGrid();
     };
+    const gridToggle = document.getElementById('grid-toggle');
+    gridToggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      setDiagramGridVisible(!isDiagramGridVisible());
+      // Keep keyboard focus on the page so d / arrows keep working afterwards.
+      gridToggle.blur();
+      document.body.focus();
+    });
     const isDiagramGridVisible = () => diagramGrid.dataset.visible === 'true';
     iframe.addEventListener('load', highlightDiagramGrid);
     select.addEventListener('change', highlightDiagramGrid);
