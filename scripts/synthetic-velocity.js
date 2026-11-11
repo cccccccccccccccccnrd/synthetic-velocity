@@ -12,6 +12,7 @@ import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serveDir } from "./serve.js";
+import { writeShapes } from "./shapes.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const INPUT_DIR = join(ROOT, "in");
@@ -124,9 +125,12 @@ async function writeHostIndex(documents) {
     .nav-zone { position: fixed; top: 0; bottom: 0; z-index: 70; width: 50vw; border: 0; padding: 0; margin: 0; background: transparent; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; outline: none; }
     .nav-zone.left { left: 0; }
     .nav-zone.right { right: 0; }
-    .diagram-square { position: fixed; top: 50%; left: 50%; z-index: 80; width: 80vmin; height: 80vmin; transform: translate(-50%, -50%); box-sizing: border-box; padding: 4vmin; background: #000; display: none; pointer-events: none; }
-    .diagram-square[data-visible="true"] { display: block; }
-    .diagram-square img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .diagram-grid { position: fixed; inset: 0; z-index: 90; background: #000; display: none; place-content: center; grid-template-columns: repeat(var(--cols, 16), var(--tile, 60px)); grid-auto-rows: var(--tile, 60px); gap: var(--gap, 4px); }
+    .diagram-grid[data-visible="true"] { display: grid; }
+    .diagram-tile { box-sizing: border-box; margin: 0; padding: 6%; border: 1px solid transparent; background: transparent; cursor: pointer; opacity: .28; outline: none; -webkit-tap-highlight-color: transparent; }
+    .diagram-tile:hover { opacity: .6; }
+    .diagram-tile[aria-current="true"] { opacity: 1; border-color: #fff; }
+    .diagram-tile img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
     .abstract-control-panel {
       position: fixed; right: 10px; top: 10px; z-index: 100;
       width: min(320px, calc(100vw - 20px));
@@ -151,7 +155,7 @@ async function writeHostIndex(documents) {
   <select id="source-select" hidden>${options}</select>
   <button class="nav-zone left" id="prev-source" aria-label="previous form"></button>
   <button class="nav-zone right" id="next-source" aria-label="next form"></button>
-  <div class="diagram-square" id="diagram-square" data-visible="false" aria-hidden="true"><img id="diagram-square-img" alt=""></div>
+  <div class="diagram-grid" id="diagram-grid" data-visible="false" aria-hidden="true"></div>
   <script type="module" src="./art.js"></script>
   <script>
     const iframe = document.getElementById('preview');
@@ -216,38 +220,77 @@ async function writeHostIndex(documents) {
       button.addEventListener('pointercancel', (event) => navPointers.delete(event.pointerId));
       button.addEventListener('click', (event) => event.preventDefault());
     }
-    // d: black square with the current diagram's shape: the exact SVG that
-    // art.js builds the pipes from (window.__syntheticVelocityShapeSvg), drawn
-    // as white outlines on black and shown as an <img> so it stays isolated.
-    const diagramSquare = document.getElementById('diagram-square');
-    const diagramSquareImg = document.getElementById('diagram-square-img');
-    const SHAPE_STYLE = '<style>* { fill: none !important; stroke: #fff !important; stroke-width: 1.5px !important; vector-effect: non-scaling-stroke; }</style>';
-    let diagramSquareUrl = '';
-    const renderDiagramSquare = () => {
-      if (diagramSquareUrl) URL.revokeObjectURL(diagramSquareUrl);
-      diagramSquareUrl = '';
-      const shape = window.__syntheticVelocityShapeSvg;
-      if (!shape) {
-        diagramSquareImg.removeAttribute('src');
-        return;
+    // d: fullscreen overview of every diagram's shape (pre-rendered by
+    // scripts/shapes.js into shapes/<name>.svg), with the current one
+    // highlighted. Click a shape to switch to it; d or Escape closes.
+    const diagramGrid = document.getElementById('diagram-grid');
+    let diagramTiles = [];
+    const highlightDiagramGrid = () => {
+      diagramTiles.forEach((tile, index) => {
+        tile.setAttribute('aria-current', index === select.selectedIndex ? 'true' : 'false');
+      });
+    };
+    const layoutDiagramGrid = () => {
+      const count = diagramTiles.length;
+      if (!count) return;
+      const gap = 4;
+      const width = window.innerWidth - 24;
+      const height = window.innerHeight - 24;
+      let best = { cols: 1, tile: 0 };
+      for (let cols = 1; cols <= count; cols++) {
+        const rows = Math.ceil(count / cols);
+        const tile = Math.floor(Math.min((width - gap * (cols - 1)) / cols, (height - gap * (rows - 1)) / rows));
+        if (tile > best.tile) best = { cols, tile };
       }
-      const markup = shape.replace(/<svg\b[^>]*>/, (tag) => tag + SHAPE_STYLE);
-      diagramSquareUrl = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
-      diagramSquareImg.src = diagramSquareUrl;
+      diagramGrid.style.setProperty('--cols', String(best.cols));
+      diagramGrid.style.setProperty('--tile', best.tile + 'px');
+      diagramGrid.style.setProperty('--gap', gap + 'px');
     };
-    const toggleDiagramSquare = () => {
-      const visible = diagramSquare.dataset.visible !== 'true';
-      diagramSquare.dataset.visible = visible ? 'true' : 'false';
-      if (visible) renderDiagramSquare();
+    const buildDiagramGrid = () => {
+      if (diagramTiles.length) return;
+      diagramTiles = Array.from(select.options).map((option, index) => {
+        const tile = document.createElement('button');
+        tile.className = 'diagram-tile';
+        tile.type = 'button';
+        tile.title = option.textContent;
+        tile.setAttribute('aria-label', option.textContent);
+        const img = document.createElement('img');
+        img.alt = '';
+        img.decoding = 'async';
+        img.src = 'shapes/' + option.value.split('/').pop().replace(/\.html?$/i, '.svg');
+        img.addEventListener('error', () => { img.style.visibility = 'hidden'; });
+        tile.appendChild(img);
+        tile.addEventListener('click', (event) => {
+          event.preventDefault();
+          showAt(index);
+          setDiagramGridVisible(false);
+        });
+        diagramGrid.appendChild(tile);
+        return tile;
+      });
+      layoutDiagramGrid();
     };
-    window.addEventListener('synthetic-velocity-scene', () => {
-      if (diagramSquare.dataset.visible === 'true') renderDiagramSquare();
-    });
+    const setDiagramGridVisible = (visible) => {
+      if (visible) buildDiagramGrid();
+      diagramGrid.dataset.visible = visible ? 'true' : 'false';
+      diagramGrid.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      if (visible) highlightDiagramGrid();
+    };
+    const isDiagramGridVisible = () => diagramGrid.dataset.visible === 'true';
+    iframe.addEventListener('load', highlightDiagramGrid);
+    select.addEventListener('change', highlightDiagramGrid);
+    window.addEventListener('resize', layoutDiagramGrid);
     const handleHostKeys = (event) => {
       if (event.key?.toLowerCase() === 'd' && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (!event.repeat) toggleDiagramSquare();
+        if (!event.repeat) setDiagramGridVisible(!isDiagramGridVisible());
+        return;
+      }
+      if (event.key === 'Escape' && isDiagramGridVisible()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setDiagramGridVisible(false);
         return;
       }
       if (event.key === 'Tab') {
@@ -305,6 +348,11 @@ async function build(noFetch) {
   await writeHostIndex(docs);
   console.log(`generated synthetic velocity host: ${SITE_DIR}`);
   console.log(`source documents: ${docs.length}`);
+  const shapes = await writeShapes(
+    SITE_DIR,
+    docs.filter((doc) => doc !== "index.html"),
+  );
+  console.log(`shapes: ${shapes}`);
 }
 
 function argValue(args, name, fallback) {

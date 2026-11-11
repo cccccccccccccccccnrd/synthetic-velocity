@@ -1477,12 +1477,14 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
     };
   };
 
+  // Shape SVG for any source diagram, exactly as the pipes see it. Used by
+  // scripts/shapes.js at build time to pre-render the "d" overview grid.
+  window.__syntheticVelocityShapeFor = (svg) =>
+    sanitizeSvg(svg, centeredScaleBox(svg));
+
   function buildSceneFromSvg(svg) {
     const box = centeredScaleBox(svg);
     const svgText = sanitizeSvg(svg, box);
-    // The exact 2D shape the pipes are built from (white outlines, no text or
-    // background); the host page's "d" overlay displays it.
-    window.__syntheticVelocityShapeSvg = svgText;
     const data = loader.parse(svgText);
     const group = new THREE.Group();
 
@@ -1552,7 +1554,6 @@ import { RoomEnvironment } from "https://esm.sh/three@0.171.0/examples/jsm/envir
         0,
       ),
     });
-    window.dispatchEvent(new Event("synthetic-velocity-scene"));
     requestRender();
   }
 
